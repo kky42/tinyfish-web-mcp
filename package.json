@@ -1,0 +1,51 @@
+{
+  "name": "@kky42/tinyfish-web-mcp",
+  "version": "0.1.0",
+  "description": "Lean MCP server with two tools, web_search and web_fetch, backed by TinyFish's free Search and Fetch APIs.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "tinyfish",
+    "web-search",
+    "web-fetch",
+    "ai-agent"
+  ],
+  "license": "MIT",
+  "author": "kky42",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kky42/tinyfish-web-mcp.git"
+  },
+  "homepage": "https://github.com/kky42/tinyfish-web-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/kky42/tinyfish-web-mcp/issues"
+  },
+  "type": "module",
+  "bin": {
+    "tinyfish-web-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p . && chmod +x dist/index.js",
+    "test": "npm run build && node --test test/unit.test.mjs",
+    "test:e2e": "npm run build && node --test test/e2e.test.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.1.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.1.0",
+    "@types/node": "^24.19.0",
+    "typescript": "^7.0.2"
+  }
+}
