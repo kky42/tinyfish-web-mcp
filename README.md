@@ -10,11 +10,10 @@ Unofficial. TinyFish also runs an [official remote MCP server](https://docs.tiny
 
 | Input | Description |
 |---|---|
-| `query` (required) | Search keywords; supports `site:` and `-site:` |
-| `purpose` | One sentence on why you're searching; improves ranking |
+| `query` (required) | Search keywords |
 | `domain_type` | `web` (default), `news`, or `research_paper` |
-| `recency_minutes` | Only results from the last N minutes |
-| `include_domains` / `exclude_domains` | Comma-separated domain filters |
+| `recency` | `hour`, `day`, `week`, `month` or `year`: only results from that period |
+| `include_domains` / `exclude_domains` | Arrays of domains to limit results to or exclude |
 
 **`web_fetch`**: reads 1–10 URLs as clean markdown, with JavaScript rendered.
 
@@ -24,6 +23,8 @@ Unofficial. TinyFish also runs an [official remote MCP server](https://docs.tiny
 | `offset` | Character position to start from, applied to every URL (default 0) |
 
 Each URL returns at most 20,000 characters. For a longer page, the result header names the exact follow-up call, for example `offset 20000`, so the agent reads the next part instead of starting over. The note sits before the page text, so it survives clients that truncate long tool output. Every call downloads the whole page again, because TinyFish has no range requests.
+
+Both tools return readable text plus `structuredContent` for scripts (for example pi's codemode): `web_search` gives `results[{title, url, snippet, ...}]`, `web_fetch` gives `pages[{url, title, text, start, end, total_chars, next_offset}]` and `errors`. `next_offset` is `null` once a page is complete. A call fails with `isError: true` when it errors, or when every URL of a `web_fetch` fails; clients that run tools from scripts get that as a normal result, so check `isError`. TinyFish returns no results for `domain_type: "news"` combined with `exclude_domains`, and rejects `recency` with `research_paper`.
 
 Markdown conversion can alter structured data; for example, it escapes `_` in JSON keys. Fetch JSON and raw files with a plain HTTP client instead.
 
@@ -57,16 +58,14 @@ codex mcp add tinyfish-web --env TINYFISH_API_KEY=sk-tinyfish-... -- npx -y @kky
 }
 ```
 
-**Pi**, via [pi-mcp-adapter](https://www.npmjs.com/package/pi-mcp-adapter). Run `pi install npm:pi-mcp-adapter`, then add this to `~/.pi/agent/mcp-adapter.json`. `directTools` and `toolPrefix: "none"` make the tools appear as plain `web_search` and `web_fetch`:
+**Pi** has built-in MCP support. Add this to `~/.pi/agent/mcp.json` and run `pi mcp list` to check it. With the default exposure the tools are reached from `codemode` scripts as `tools.mcp__tinyfish_web__web_search` and `tools.mcp__tinyfish_web__web_fetch`; add `"exposure": "direct"` to declare them to the model like built-in tools.
 
 ```json
 {
   "mcpServers": {
     "tinyfish-web": {
       "command": "npx",
-      "args": ["-y", "@kky42/tinyfish-web-mcp"],
-      "directTools": true,
-      "toolPrefix": "none"
+      "args": ["-y", "@kky42/tinyfish-web-mcp"]
     }
   }
 }

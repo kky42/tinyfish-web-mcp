@@ -34,6 +34,25 @@ test("web_search returns ranked results with URLs", async () => {
 	assert.match(text(result), /^1\. .+\n(?:.*\n)*?\s+https?:\/\//m);
 });
 
+test("web_search returns structured results that match the text", async () => {
+	const result = await client.callTool({ name: "web_search", arguments: { query: "Node.js release schedule" } });
+	const { results } = result.structuredContent;
+	assert.ok(results.length > 0);
+	assert.match(results[0].url, /^https?:\/\//);
+	assert.ok(text(result).includes(results[0].url));
+});
+
+test("web_search applies array domain filters and the recency enum", async () => {
+	const result = await client.callTool({
+		name: "web_search",
+		arguments: { query: "release notes", include_domains: ["github.com", "nodejs.org"], recency: "year" },
+	});
+	assert.ok(!result.isError, text(result));
+	const { results } = result.structuredContent;
+	assert.ok(results.length > 0);
+	assert.ok(results.every((r) => /(^|\.)(github\.com|nodejs\.org)$/.test(new URL(r.url).hostname)));
+});
+
 test("web_fetch continues a long document from the offset in its header note", async () => {
 	const first = text(await client.callTool({ name: "web_fetch", arguments: { urls: [LONG_DOC] } }));
 	const next = first.match(/and offset (\d+)\]/);
@@ -52,6 +71,21 @@ test("web_fetch reports per-URL failures without failing the call", async () => 
 	});
 	assert.ok(!result.isError, text(result));
 	assert.match(text(result), /— https:\/\/example\.com/);
+	assert.match(text(result), /✗ https:\/\/nonexistent\.invalid/);
+});
+
+test("web_fetch structured pages carry per-URL text and the continuation offset", async () => {
+	const result = await client.callTool({ name: "web_fetch", arguments: { urls: [LONG_DOC, "https://example.com"] } });
+	const [long, short] = result.structuredContent.pages;
+	assert.equal(long.url, LONG_DOC);
+	assert.equal(long.next_offset, long.end);
+	assert.ok(long.text.length === long.end - long.start && long.end < long.total_chars);
+	assert.equal(short.next_offset, null);
+});
+
+test("web_fetch is an error only when every URL fails", async () => {
+	const result = await client.callTool({ name: "web_fetch", arguments: { urls: ["https://nonexistent.invalid"] } });
+	assert.equal(result.isError, true);
 	assert.match(text(result), /✗ https:\/\/nonexistent\.invalid/);
 });
 

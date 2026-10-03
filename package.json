@@ -1,6 +1,6 @@
 {
   "name": "@kky42/tinyfish-web-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lean MCP server with two tools, web_search and web_fetch, backed by TinyFish's free Search and Fetch APIs.",
   "keywords": [
     "mcp",

@@ -16,16 +16,18 @@ export const FETCH_WINDOW = 20_000;
 
 export type DomainType = "web" | "news" | "research_paper";
 
+export const RECENCY_MINUTES = { hour: 60, day: 1440, week: 10_080, month: 43_200, year: 525_600 } as const;
+export type Recency = keyof typeof RECENCY_MINUTES;
+
 export interface SearchParams {
 	query: string;
-	purpose?: string;
 	domain_type?: DomainType;
-	recency_minutes?: number;
-	include_domains?: string;
-	exclude_domains?: string;
+	recency?: Recency;
+	include_domains?: string[];
+	exclude_domains?: string[];
 }
 
-interface SearchResult {
+export interface SearchResult {
 	site_name?: string;
 	title?: string;
 	snippet?: string;
@@ -67,15 +69,33 @@ async function errorFromResponse(res: Response): Promise<string> {
 	} catch {
 		/* ignore */
 	}
+	// TinyFish errors are {"error": {"code", "message"}}; keep just the message.
+	try {
+		const message = (JSON.parse(body) as { error?: { message?: string } }).error?.message;
+		if (message) body = message;
+	} catch {
+		/* not JSON: keep the raw body */
+	}
 	return `HTTP ${res.status}${body ? `: ${body}` : ""}`;
 }
 
-export async function search(params: SearchParams, signal?: AbortSignal): Promise<string> {
+export interface SearchOutput {
+	text: string;
+	data: {
+		query: string;
+		total_results: number;
+		results: SearchResult[];
+	};
+}
+
+export async function search(params: SearchParams, signal?: AbortSignal): Promise<SearchOutput> {
 	const key = requireApiKey();
-	const sp = new URLSearchParams();
-	for (const [name, value] of Object.entries(params)) {
-		if (value !== undefined && value !== "") sp.set(name, String(value));
-	}
+	// TinyFish takes domain lists as comma-separated strings and recency in minutes.
+	const sp = new URLSearchParams({ query: params.query });
+	if (params.domain_type) sp.set("domain_type", params.domain_type);
+	if (params.recency) sp.set("recency_minutes", String(RECENCY_MINUTES[params.recency]));
+	if (params.include_domains?.length) sp.set("include_domains", params.include_domains.join(","));
+	if (params.exclude_domains?.length) sp.set("exclude_domains", params.exclude_domains.join(","));
 
 	const res = await fetch(`${SEARCH_BASE}?${sp}`, { headers: { "X-API-Key": key }, signal });
 	if (!res.ok) throw new Error(`TinyFish search failed: ${await errorFromResponse(res)}`);
@@ -85,7 +105,10 @@ export async function search(params: SearchParams, signal?: AbortSignal): Promis
 	const lines = [`[web_search] "${params.query}" — ${data.total_results ?? results.length} results`];
 	if (results.length === 0) lines.push("(no results)");
 	results.forEach((r, i) => lines.push(...formatSearchResult(r, params.domain_type, i + 1)));
-	return lines.join("\n");
+	return {
+		text: lines.join("\n"),
+		data: { query: params.query, total_results: data.total_results ?? results.length, results },
+	};
 }
 
 function formatSearchResult(r: SearchResult, domainType: DomainType | undefined, index: number): string[] {
@@ -107,7 +130,27 @@ function formatSearchResult(r: SearchResult, domainType: DomainType | undefined,
 	return lines;
 }
 
-export async function fetchPages(urls: string[], offset: number, signal?: AbortSignal): Promise<string> {
+export interface FetchedPage {
+	url: string;
+	final_url?: string;
+	title?: string;
+	description?: string;
+	/** The returned window of the page, as markdown. */
+	text: string;
+	/** Character range of `text` within the full page. */
+	start: number;
+	end: number;
+	total_chars: number;
+	/** Offset for the next web_fetch call, or null when the page is complete. */
+	next_offset: number | null;
+}
+
+export interface FetchOutput {
+	text: string;
+	data: { pages: FetchedPage[]; errors: { url: string; error: string }[] };
+}
+
+export async function fetchPages(urls: string[], offset: number, signal?: AbortSignal): Promise<FetchOutput> {
 	const key = requireApiKey();
 	const res = await fetch(FETCH_BASE, {
 		method: "POST",
@@ -119,6 +162,7 @@ export async function fetchPages(urls: string[], offset: number, signal?: AbortS
 
 	const data = (await res.json()) as FetchResponse;
 	const lines: string[] = [];
+	const pages: FetchedPage[] = [];
 	for (const r of data.results ?? []) {
 		// Lead with the requested URL so multi-URL results map back to their
 		// inputs; surface redirects since relative links resolve against final_url.
@@ -132,10 +176,25 @@ export async function fetchPages(urls: string[], offset: number, signal?: AbortS
 		// the tail, which would drop a trailing note for later URLs.
 		if (note) lines.push(`  ${note}`);
 		lines.push(text, "");
+
+		const total = (r.text ?? "").length;
+		const end = Math.min(offset + text.length, total);
+		pages.push({
+			url: r.url,
+			...(r.final_url && r.final_url !== r.url && { final_url: r.final_url }),
+			...(r.title && { title: r.title }),
+			...(r.description && { description: r.description }),
+			text,
+			start: Math.min(offset, total),
+			end,
+			total_chars: total,
+			next_offset: end < total ? end : null,
+		});
 	}
-	for (const e of data.errors ?? []) lines.push(`✗ ${e.url} — ${e.error}`);
+	const errors = data.errors ?? [];
+	for (const e of errors) lines.push(`✗ ${e.url} — ${e.error}`);
 	if (lines.length === 0) lines.push("(no content returned)");
-	return lines.join("\n");
+	return { text: lines.join("\n"), data: { pages, errors } };
 }
 
 /**
