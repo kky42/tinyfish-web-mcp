@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
-import { FETCH_WINDOW, RECENCY_MINUTES, type Recency, fetchPages, search } from "./tinyfish.js";
+import { RECENCY_MINUTES, type Recency, fetchPages, search } from "./tinyfish.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -25,11 +25,19 @@ const fetchPageSchema = z.object({
 	final_url: z.string().optional(),
 	title: z.string().optional(),
 	description: z.string().optional(),
-	text: z.string().describe("Markdown of chars [start, end) of the page."),
-	start: z.number(),
-	end: z.number(),
+	text: z.string().describe("Markdown of the page, or of its first shown_lines lines when truncated."),
 	total_chars: z.number(),
-	next_offset: z.number().nullable().describe("Offset for the next call, or null when the page is complete."),
+	truncated: z
+		.object({
+			shown_lines: z.number(),
+			total_lines: z.number(),
+			path: z.string().optional().describe("Temp file with the full markdown; line numbers refer to it."),
+			save_error: z.string().optional(),
+			outline: z.array(z.object({ line: z.number(), level: z.number(), title: z.string() })),
+			omitted_headings: z.number(),
+		})
+		.optional()
+		.describe("Present when the page exceeded one window."),
 });
 
 export function createServer(): McpServer {
@@ -40,7 +48,7 @@ export function createServer(): McpServer {
 			// model sees raw results instead of formatted text.
 			instructions:
 				"Search the web with web_search, then read pages with web_fetch (argument `urls` is an array). " +
-				"Results carry structuredContent: web_search {results[{title,url,snippet}]}, web_fetch {pages[{url,text,next_offset}],errors}. " +
+				"Results carry structuredContent: web_search {results[{title,url,snippet}]}, web_fetch {pages[{url,text,truncated?{path,outline}}],errors}. " +
 				"Check isError before reading structuredContent.",
 		},
 	);
@@ -87,17 +95,9 @@ export function createServer(): McpServer {
 		"web_fetch",
 		{
 			title: "Web Fetch",
-			description: `Read web pages as clean markdown, with JavaScript rendered. Up to 10 URLs per call. Each URL returns at most ${FETCH_WINDOW} characters; a truncated page's header gives the offset to continue from. In scripts, read structuredContent.pages[{url,title,text,next_offset}] and .errors; next_offset is null when the page is complete. Markdown conversion can alter structured data (e.g. it escapes _ in JSON keys), so fetch JSON or raw files with a plain HTTP client instead.`,
+			description: `Read web pages as clean markdown, with JavaScript rendered. Up to 10 URLs per call. One call returns about 19 KB of text in total, split across its URLs. A page that doesn't fit is saved in full to a local markdown file, and its header gives the path plus an outline of headings with line numbers: Grep the file or Read the line range you need instead of fetching again. In scripts, read structuredContent.pages[{url,title,text,truncated?}] and .errors; truncated carries {path,outline[{line,title}],shown_lines,total_lines}. Markdown conversion can alter structured data (e.g. it escapes _ in JSON keys), so fetch JSON or raw files with a plain HTTP client instead.`,
 			inputSchema: z.object({
 				urls: z.array(z.string().min(1)).min(1).max(10).describe("URLs to read (1–10)."),
-				offset: z
-					.number()
-					.int()
-					.min(0)
-					.optional()
-					.describe(
-						"Character position to start from, applied to every URL. Default 0. To continue a truncated page, use the offset from its header note.",
-					),
 			}),
 			outputSchema: z.object({
 				pages: z.array(fetchPageSchema),
@@ -105,8 +105,8 @@ export function createServer(): McpServer {
 			}),
 			annotations: { readOnlyHint: true, openWorldHint: true },
 		},
-		async ({ urls, offset }, ctx) => {
-			const { text, data } = await fetchPages(urls, offset ?? 0, ctx.mcpReq.signal);
+		async ({ urls }, ctx) => {
+			const { text, data } = await fetchPages(urls, ctx.mcpReq.signal);
 			// A per-URL failure in a mixed batch stays a normal result; only a call
 			// that returned nothing usable is an error, so codemode scripts reject.
 			const failed = data.pages.length === 0 && data.errors.length > 0;

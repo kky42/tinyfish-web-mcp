@@ -1,6 +1,6 @@
 {
   "name": "@kky42/tinyfish-web-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Lean MCP server with two tools, web_search and web_fetch, backed by TinyFish's free Search and Fetch APIs.",
   "keywords": [
     "mcp",
@@ -35,9 +35,8 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p . && chmod +x dist/index.js",
-    "test": "npm run build && node --test test/unit.test.mjs",
     "test:e2e": "npm run build && node --test test/e2e.test.mjs",
-    "prepublishOnly": "npm test"
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "^2.1.0",

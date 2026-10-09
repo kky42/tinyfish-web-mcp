@@ -1,6 +1,7 @@
 // End-to-end: spawns the built server over stdio with a real MCP client and
 // calls the real TinyFish APIs. Requires TINYFISH_API_KEY.
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { after, before, test } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -53,15 +54,18 @@ test("web_search applies array domain filters and the recency enum", async () =>
 	assert.ok(results.every((r) => /(^|\.)(github\.com|nodejs\.org)$/.test(new URL(r.url).hostname)));
 });
 
-test("web_fetch continues a long document from the offset in its header note", async () => {
-	const first = text(await client.callTool({ name: "web_fetch", arguments: { urls: [LONG_DOC] } }));
-	const next = first.match(/and offset (\d+)\]/);
-	assert.ok(next, "long page should end with a continuation note");
+test("web_fetch saves a long page and points to it with a line-numbered outline", async () => {
+	const result = await client.callTool({ name: "web_fetch", arguments: { urls: [LONG_DOC] } });
+	const note = text(result).match(/Full markdown saved to (\S+\.md)/);
+	assert.ok(note, "long page should name its saved file");
+	assert.match(text(result), /Outline \(line: heading\):\n\s+\d+: #/);
 
-	const second = text(
-		await client.callTool({ name: "web_fetch", arguments: { urls: [LONG_DOC], offset: Number(next[1]) } }),
-	);
-	assert.match(second, new RegExp(`showing chars ${next[1]}–\\d+ of \\d+`));
+	const [page] = result.structuredContent.pages;
+	const saved = (await readFile(note[1], "utf8")).split("\n");
+	assert.equal(page.truncated.path, note[1]);
+	assert.equal(saved.length, page.truncated.total_lines);
+	assert.equal(page.text, saved.slice(0, page.truncated.shown_lines).join("\n"));
+	for (const h of page.truncated.outline) assert.ok(saved[h.line - 1].includes(h.title));
 });
 
 test("web_fetch reports per-URL failures without failing the call", async () => {
@@ -74,13 +78,13 @@ test("web_fetch reports per-URL failures without failing the call", async () => 
 	assert.match(text(result), /✗ https:\/\/nonexistent\.invalid/);
 });
 
-test("web_fetch structured pages carry per-URL text and the continuation offset", async () => {
+test("web_fetch structured pages mark only long pages as truncated", async () => {
 	const result = await client.callTool({ name: "web_fetch", arguments: { urls: [LONG_DOC, "https://example.com"] } });
 	const [long, short] = result.structuredContent.pages;
 	assert.equal(long.url, LONG_DOC);
-	assert.equal(long.next_offset, long.end);
-	assert.ok(long.text.length === long.end - long.start && long.end < long.total_chars);
-	assert.equal(short.next_offset, null);
+	assert.ok(long.truncated && long.text.length < long.total_chars);
+	assert.equal(short.truncated, undefined);
+	assert.equal(short.text.length, short.total_chars);
 });
 
 test("web_fetch is an error only when every URL fails", async () => {
@@ -90,7 +94,7 @@ test("web_fetch is an error only when every URL fails", async () => {
 });
 
 test("invalid arguments are rejected before any request", async () => {
-	const result = await client.callTool({ name: "web_fetch", arguments: { urls: [], offset: -1 } });
+	const result = await client.callTool({ name: "web_fetch", arguments: { urls: [] } });
 	assert.equal(result.isError, true);
 });
 
